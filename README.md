@@ -14,18 +14,16 @@ python app.py
 example usages:
 
 ```bash
-bash curl_examples.sh
-```
-
-```bash
 curl -X POST http://127.0.0.1:5000/chat \
   -H "Content-Type: application/json" \
-  -d '{"query": "Who was the 2 person to walk on the moon?"}'
+  -d '{"query": "Who was the 2 person to walk on the moon?", "user": "ann"}'
 
-curl http://127.0.0.1:5000/history
+curl "http://127.0.0.1:5000/history?user=ann"
 ```
 
 /chat also returns "used_wikipedia" so you can see if wiki tool was used.
+
+Pass `user` in chat body, and `?user=` when reading history. If missing, use "default".
 
 tests:
 
@@ -39,13 +37,13 @@ I used Flask because it is simple and enough for 2 endpoints.
 
 - `app.py`: HTTP routes, Cohere call, tool loop, rate limit
 - `wikipedia.py`: Wikipedia search
-- `history.py`: sqlite save / load
+- `history.py`: sqlite save / load (per user)
 
 English Wikipedia only, srlimit=5. Wiki request has a timeout. The model may not always call the tool.
 
 I only loop tool calls a few times so it will not hang forever.
 
-There is a very simple rate limit (per IP). No real auth.
+There is a very simple rate limit (per IP). No real auth. User id is just a string from the client (easy to fake).
 
 Basic logging to stdout. If wiki fails we log a warning and continue (model can still answer). Cohere errors return 500.
 
@@ -53,6 +51,7 @@ Basic logging to stdout. If wiki fails we log a warning and continue (model can 
 
 - sqlite file is easy, but not good for multi-server deploy
 - rate limit is in memory, so it resets when process restarts
+- "user" is just a string from client, not real login
 - model decides when to use the tool. i don't force it for every question
 - keeping cohere + tool loop in app.py is a bit mixed, but ok for this size
 
@@ -61,7 +60,6 @@ Basic logging to stdout. If wiki fails we log a warning and continue (model can 
 - Auth / API key
 - Cache Wikipedia results
 - Use real production server
-- Per-user history, not one shared table
 - Support more languages, not only English
 - Better rate limit (redis)
 

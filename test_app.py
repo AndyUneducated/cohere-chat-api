@@ -2,7 +2,8 @@ import history
 import app as myapp
 
 history.init_db()
-client = myapp.app.test_client()
+c = myapp.app.test_client()
+
 
 def setup_function():
     history.clear()
@@ -11,58 +12,48 @@ def setup_function():
 
 
 def test_empty():
-    r = client.post("/chat", json={"query": ""})
-    assert r.status_code == 400
+    assert c.post("/chat", json={"query": ""}).status_code == 400
 
 
-def test_no_body():
-    # forgot to send json
-    r = client.post("/chat")
-    assert r.status_code == 400
+def test_no_json():
+    # i forgot content-type once
+    assert c.post("/chat").status_code == 400
 
 
-def test_history(monkeypatch):
+def test_ok(monkeypatch):
     monkeypatch.setattr(myapp, "run_chat", lambda q: ("ok", True))
-
-    r = client.post("/chat", json={"query": "moon?"})
-    data = r.get_json()
+    r = c.post("/chat", json={"query": "moon?", "user": "ann"})
+    j = r.get_json()
     assert r.status_code == 200
-    assert data["used_wikipedia"] is True
+    assert j["user"] == "ann"
+    assert j["used_wikipedia"]
 
-    h = client.get("/history").get_json()["history"]
-    assert h[0]["query"] == "moon?"
-
-
-def test_history_grows(monkeypatch):
-    monkeypatch.setattr(myapp, "run_chat", lambda q: ("ans", False))
-    client.post("/chat", json={"query": "a"})
-    client.post("/chat", json={"query": "b"})
-    h = client.get("/history").get_json()["history"]
-    assert len(h) == 2
+    hist = c.get("/history?user=ann").get_json()["history"]
+    assert hist[0]["query"] == "moon?"
 
 
-def test_error(monkeypatch):
-    def boom(q):
-        raise RuntimeError("cohere down")
+def test_two_users(monkeypatch):
+    monkeypatch.setattr(myapp, "run_chat", lambda q: ("x", False))
+    c.post("/chat", json={"query": "q1", "user": "1"})
+    c.post("/chat", json={"query": "q2", "user": "2"})
+    c.post("/chat", json={"query": "q3", "user": "1"})
 
-    monkeypatch.setattr(myapp, "run_chat", boom)
-    r = client.post("/chat", json={"query": "hi"})
-    assert r.status_code == 500
+    u1 = c.get("/history?user=1").get_json()["history"]
+    u2 = c.get("/history?user=2").get_json()["history"]
+    assert len(u1) == 2
+    assert len(u2) == 1
 
 
-def test_rate_limit(monkeypatch):
+def test_fail(monkeypatch):
+    def bad(q):
+        raise Exception("down")
+    monkeypatch.setattr(myapp, "run_chat", bad)
+    assert c.post("/chat", json={"query": "hi"}).status_code == 500
+
+
+def test_rate(monkeypatch):
     myapp.RATE_LIMIT = 2
     monkeypatch.setattr(myapp, "run_chat", lambda q: ("ok", False))
-
-    client.post("/chat", json={"query": "1"})
-    client.post("/chat", json={"query": "1"})
-    r = client.post("/chat", json={"query": "1"})
-    assert r.status_code == 429
-
-
-def test_wiki():
-    # just make sure wiki helper works (needs network)
-    res = myapp.wikipedia.search("Buzz Aldrin")
-    assert isinstance(res, list)
-    assert len(res) > 0
-    assert "title" in res[0]
+    c.post("/chat", json={"query": "1"})
+    c.post("/chat", json={"query": "2"})
+    assert c.post("/chat", json={"query": "3"}).status_code == 429

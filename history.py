@@ -8,27 +8,34 @@ def init_db():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS history ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "query TEXT, response TEXT, used_wikipedia INTEGER)"
+        "user_id TEXT, query TEXT, response TEXT, used_wikipedia INTEGER)"
     )
+    # if old table has no user_id column
+    try:
+        conn.execute("ALTER TABLE history ADD COLUMN user_id TEXT")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
 
-def add(query, response, used_wikipedia=False):
+def add(user_id, query, response, used_wikipedia=False):
     conn = sqlite3.connect(DB)
     flag = 1 if used_wikipedia else 0
     conn.execute(
-        "INSERT INTO history (query, response, used_wikipedia) VALUES (?, ?, ?)",
-        (query, response, flag),
+        "INSERT INTO history (user_id, query, response, used_wikipedia) VALUES (?, ?, ?, ?)",
+        (user_id, query, response, flag),
     )
     conn.commit()
     conn.close()
 
 
-def list_all():
+def list_for_user(user_id):
     conn = sqlite3.connect(DB)
     cur = conn.execute(
-        "SELECT query, response, used_wikipedia FROM history ORDER BY id"
+        "SELECT query, response, used_wikipedia FROM history "
+        "WHERE user_id = ? ORDER BY id",
+        (user_id,),
     )
     items = []
     for row in cur.fetchall():
@@ -39,6 +46,7 @@ def list_all():
         })
     conn.close()
     return items
+
 
 # for tests
 def clear():

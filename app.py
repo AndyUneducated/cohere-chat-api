@@ -1,14 +1,8 @@
-import json
-import logging
-import os
-import time
-
+import json, logging, os, time
 import cohere
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
-
-import history
-import wikipedia
+import history, wikipedia
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -16,39 +10,31 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 co = cohere.ClientV2(os.getenv("COHERE_API_KEY"))
 MODEL = "command-a-03-2025"
-
 RATE_LIMIT = 10
 _hits = {}
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "wikipedia_search",
-            "description": "Search Wikipedia",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                },
-                "required": ["query"],
-            },
-        },
-    }
-]
+# cohere tool schema
+TOOLS = [{"type": "function", "function": {
+    "name": "wikipedia_search",
+    "description": "search wiki",
+    "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    },
+}}]
 
 history.init_db()
 
 
 def check_rate_limit(ip):
     now = time.time()
-    arr = _hits.get(ip, [])
-    arr = [t for t in arr if now - t < 60]
-    if len(arr) >= RATE_LIMIT:
-        _hits[ip] = arr
+    old = [t for t in _hits.get(ip, []) if now - t < 60]
+    if len(old) >= RATE_LIMIT:
+        _hits[ip] = old
         return False
-    arr.append(now)
-    _hits[ip] = arr
+    old.append(now)
+    _hits[ip] = old
     return True
 
 
@@ -56,51 +42,36 @@ def run_chat(query):
     msgs = [{"role": "user", "content": query}]
     used_wiki = False
 
-    for i in range(3):
+    for _ in range(3):
         resp = co.chat(model=MODEL, messages=msgs, tools=TOOLS)
-        msg = resp.message
+        m = resp.message
+        if not m.tool_calls:
+            txt = m.content[0].text if m.content else ""
+            return txt, used_wiki
 
-        if not msg.tool_calls:
-            if msg.content:
-                return msg.content[0].text, used_wiki
-            return "", used_wiki
-
-        msgs.append(msg)
-
-        for tc in msg.tool_calls:
-            name = tc.function.name
+        msgs.append(m)
+        for tc in m.tool_calls:
             args = json.loads(tc.function.arguments)
-
-            if name == "wikipedia_search":
-                q = args.get("query", query)
+            results = []
+            if tc.function.name == "wikipedia_search":
+                q = args.get("query") or query
                 print("calling wiki:", q)
                 used_wiki = True
                 try:
                     results = wikipedia.search(q)
                 except Exception as e:
-                    logging.warning("wiki error: %s", e)
-                    results = []
-            else:
-                results = []
+                    print("wiki fail", e)
 
             if results:
-                content = []
-                for r in results:
-                    content.append({"type": "document", "document": {"data": json.dumps(r)}})
+                content = [{"type": "document", "document": {"data": json.dumps(x)}} for x in results]
             else:
-                content = "no result from wiki"
+                content = "no wiki result"
 
-            msgs.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": content,
-            })
+            msgs.append({"role": "tool", "tool_call_id": tc.id, "content": content})
 
-    # fallback
     resp = co.chat(model=MODEL, messages=msgs)
-    if resp.message.content:
-        return resp.message.content[0].text, used_wiki
-    return "", used_wiki
+    txt = resp.message.content[0].text if resp.message.content else ""
+    return txt, used_wiki
 
 
 @app.route("/chat", methods=["POST"])
@@ -114,19 +85,29 @@ def chat():
     if not query:
         return jsonify({"error": "query is required"}), 400
 
+    user = body.get("user") or "default"
+    user = str(user).strip() or "default"
+
     try:
         answer, used_wiki = run_chat(query)
     except Exception as e:
-        logging.exception("failed")
+        logging.exception("chat error")
         return jsonify({"error": str(e)}), 500
 
-    history.add(query, answer, used_wiki)
-    return jsonify({"query": query, "response": answer, "used_wikipedia": used_wiki})
+    history.add(user, query, answer, used_wiki)
+    return jsonify({
+        "user": user,
+        "query": query,
+        "response": answer,
+        "used_wikipedia": used_wiki,
+    })
 
 
 @app.route("/history", methods=["GET"])
 def get_history():
-    return jsonify({"history": history.list_all()})
+    user = request.args.get("user") or "default"
+    user = str(user).strip() or "default"
+    return jsonify({"user": user, "history": history.list_for_user(user)})
 
 
 if __name__ == "__main__":
